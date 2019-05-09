@@ -1,8 +1,8 @@
 name "Old Images Policy"
 rs_pt_ver 20180301
 type "policy"
-short_description "A policy that sends email notifications when a snapshots older then a certain timeframe are fouond"
-long_description "Version 1.0"
+short_description "A policy that sends email notifications when an image older then a certain timeframe are fouond"
+long_description "Version: 1.0"
 severity "high"
 category "Cost"
 
@@ -20,27 +20,25 @@ end
 
 parameter "param_age_days" do
   type "number"
-  label "Number of days old snapshot to delete"
+  label "Number of days old image to delete"
+  description "Images older than this time, will be included in the report"
 end
 
-parameter "param_escalate_to" do
-  type "string"
-  label "Email address to send escalation emails to"
+parameter "param_email" do
+  label "Email addresses"
+  description "Email addresses of the recipients you wish to notify"
+  type "list"
 end
 
 parameter "param_images_tag_list" do
   type "list"
-  label "Images Tag List"
-  default ["images:keep=true"]
+  label "Images Tag List (e.g.: image:keep=true)"
+  description "List of tags to exclude"
 end
 
 auth "rs", type: "rightscale"
 
-resources "clouds", type: "rs_cm.clouds" do
-  filter do
-    cloud_type ne: ["soft_layer", "cloud_stack","azure","rackspace_next_gen","vscale","blue_skies","open_stack_v2","uca","open_stack_v3"]
-  end
-end
+resources "clouds", type: "rs_cm.clouds"
 
 resources "images", type: "rs_cm.images" do
   iterate @clouds
@@ -48,6 +46,7 @@ resources "images", type: "rs_cm.images" do
   filter do
     visibility "private"
   end
+  tags none($param_images_tag_list,"policy:delete=error")
 end
 
 datasource "ds_images" do
@@ -57,94 +56,72 @@ datasource "ds_images" do
   field "description", val(iter_item, "description")
   field "root_device_storage", val(iter_item,"root_device_storage")
   field "href", href(iter_item)
+  field "updated_at", val(iter_item, "updated_at")
 end
 
-datasource "ds_images_tags" do
-  request do
-    auth $rs
-    verb "POST"
-    host rs_cm_host
-    path "/api/tags/by_resource"
-    header "X-Api-Version", "1.5"
-    body_field "resource_hrefs", hrefs(@images)
+escalation "report_old_images" do
+  request_approval  do
+    label "Escalation approval"
+    description "Approve delete action"
+    parameter "approval_reason" do
+      type "string"
+      label "Reason for approval"
+      description "Explain why you are approving the action"
+    end
   end
+
+  #run "delete_old_images", data
+  email $param_email
 end
 
-datasource "ds_filtered_images" do
-  run_script $js_filter_ds_images, $ds_images, $ds_images_tags, $param_snapshot_tag_list
+resolution "report_old_images_resolution" do
+  email $param_email
 end
 
-script "js_filter_ds_images", type: "javascript" do
-  parameters "ds_images", "ds_images_tags", "param_images_tag_list"
-  result "filtered_snapshots"
-  code <<-EOS
-// This is the list of filtered ds_images.
-var filtered_snapshots = [];
-// This is the map of instance href to its tags.
-var tags = {};
-for (var i = 0; i < ds_images_tags.length; i++) {
-  vt = ds_images_tags[i]
-  for (var j = 0; j < vt['links'].length; j++) {
-    link = vt['links'][j]
-    if (link['rel'] == 'resource') {
-      tags[link['href']] = vt['tags']
-    }
-  }
-}
-// Go through all the ds_images and filter the ones that don't
-// comply with the tag rules.
-for (var i = 0; i < ds_images.length; i++) {
-  vol = ds_images[i]
-  vol_tags = []
-  // Tags is an array of hashes each with just 'name'. Let's convert
-  // them to an array of strings.
-  for (var j = 0; j < tags[vol['href']].length; j++) {
-    vol_tags.push(tags[vol['href']][j]['name'])
-  }
-  // Determines whether this resource is properly tagged
-  var good = true;
-  if (_.intersection(param_images_tag_list, vol_tags).length != param_images_tag_list.length) {
-    good = false
-  }
-  if (good) {
-    filtered_snapshots.push(
-      {
-        resource_uid: vol['resource_uid'],
-        name: vol['name'],
-        href: vol['href'],
-        tags: vol_tags,
-        description: vol['description'],
-        root_device_storage: vol['root_device_storage']
-      }
-    )
-  }
-};
-  EOS
-end
-
-escalation "alert" do
-  email $param_escalate_to
-end
-resolution "resolution" do
-  email $param_escalate_to
-end
-
-policy "pol_snapshots" do
+policy "pol_old_images" do
   validate_each $ds_images do
-    summary_template "Snapshots that can be deleted - GT"
+    summary_template "{{ rs_project_name }} (Account ID: {{ rs_project_id }}): {{len data}} Images that can be deleted"
     detail_template <<-EOS
-# Snapshots that can be deleted
+# Images that can be deleted
 
-| Resource UID | Name | Href | Tags | Description | Root Device Storage |
-| ------------ | ---- | ---- | ---- | ----------- | ------------------- |
+| Resource UID | Name | Href | Tags | Description | Root Device Storage | Updated At |
+| ------------ | ---- | ---- | ---- | ----------- | ------------------- | ---------- |
 {{ range data -}}
-| {{ .resource_uid }} | {{ .name }} | {{.href}} | {{.tags}} | {{.description}} | {{.root_device_storage}} |
+| {{ .resource_uid }} | {{ .name }} | {{.href}} | {{.tags}} | {{.description}} | {{.root_device_storage}} | {{.updated_at}}
 {{ end -}}
 EOS
 
-    escalate $alert
-    # check gt(dec(to_d(val(item, "updated_at")), now), prod($param_age_days, 24*3600))
-    check gt(0,0)
-    resolve $resolution
+    escalate $report_old_images
+    check lt(dec(now,to_d(val(item, "updated_at"))), prod($param_age_days, 24*3600))
+    resolve $report_old_images_resolution
   end
+end
+
+define delete_old_images($data) do
+  foreach $item in $data do
+    sub on_error: image_error($item) do
+      @image = rs_cm.get(href: $item['href'])
+      @image.destroy()
+    end
+    call sys_log('destroy' ,to_s($item))
+  end
+end
+
+define image_error($item) do
+  sub on_error: skip do
+    rs_cm.tags.multi_add(resource_hrefs: [$item['href']], tags: ["policy:delete=error"])
+  end
+  call sys_log('destroy-failed' ,to_s($item))
+  $_error_behavior = "skip"
+end
+
+define sys_log($subject, $detail) do
+  rs_cm.audit_entries.create(
+    notify: "None",
+    audit_entry: {
+      auditee_href: @@account,
+      summary: "Old image: "+$subject,
+      detail: $detail
+    }
+  )
 end
