@@ -1,11 +1,14 @@
-name "Downsize SAP Instances based on metrics of cpu, memory, and network throughput."
+name "Rightsize AWS Instances based on metrics of cpu and memory"
 rs_pt_ver 20180301
 type "policy"
-short_description "A policy that downsizes instances based on monitoring metrics. \n See the [README](https://github.com/rightscale/policy_templates/tree/master/cost/downsize_instance) and [docs.rightscale.com/policies](http://docs.rightscale.com/policies/) to learn more."
-long_description "Version: 1.01"
+short_description "A policy that rightsizes instances based on monitoring metrics. \n See the [README](https://github.com/rightscale/policy_templates/tree/master/cost/downsize_instance) and [docs.rightscale.com/policies](http://docs.rightscale.com/policies/) to learn more."
+long_description "Version: 1.00"
 severity "medium"
 category "Cost"
 
+###############################################################################
+# Permissions
+###############################################################################
 
 permission "perm_instances" do
   label "Permissions for instances"
@@ -19,7 +22,11 @@ permission "perm_monitoring_metrics" do
   resources "rs_cm.monitoring_metrics"
 end
 
-parameter "param_avg_free_memory_percent" do
+###############################################################################
+# Parameters
+###############################################################################
+
+parameter "param_avg_free_memory_percent_downsize" do
   type "number"
   label "Average free memory percent to allow for downsize"
   default -1
@@ -27,7 +34,7 @@ parameter "param_avg_free_memory_percent" do
   max_value 100
 end
 
-parameter "param_max_free_memory_percent" do
+parameter "param_max_free_memory_percent_downsize" do
   type "number"
   label "Maximum free memory percent to allow for downsize"
   default -1
@@ -35,7 +42,7 @@ parameter "param_max_free_memory_percent" do
   max_value 100
 end
 
-parameter "param_avg_cpu_idle" do
+parameter "param_avg_cpu_idle_downsize" do
   type "number"
   label "Average cpu idle percent to allow for downsize"
   default -1
@@ -43,9 +50,42 @@ parameter "param_avg_cpu_idle" do
   max_value 100
 end
 
-parameter "param_max_cpu_idle" do
+parameter "param_max_cpu_idle_downsize" do
   type "number"
   label "Maximum cpu idle percent to allow for downsize."
+  default -1
+  min_value -1
+  max_value 100
+end
+
+
+parameter "param_avg_free_memory_percent_upsize" do
+  type "number"
+  label "Average free memory percent to allow for upsize"
+  default -1
+  min_value -1
+  max_value 100
+end
+
+parameter "param_max_free_memory_percent_upsize" do
+  type "number"
+  label "Maximum free memory percent to allow for upsize"
+  default -1
+  min_value -1
+  max_value 100
+end
+
+parameter "param_avg_cpu_idle_upsize" do
+  type "number"
+  label "Average cpu idle percent to allow for upsize"
+  default -1
+  min_value -1
+  max_value 100
+end
+
+parameter "param_max_cpu_idle_upsize" do
+  type "number"
+  label "Maximum cpu idle percent to allow for upsize."
   default -1
   min_value -1
   max_value 100
@@ -76,7 +116,23 @@ parameter "param_cooldown_days" do
   default 30
 end
 
+###############################################################################
+# Authentication
+###############################################################################
+
 auth "auth_rs", type: "rightscale"
+
+auth "my_aws_auth", type: "aws" do
+  version 4
+  service "s3"
+  region "us-east-1"
+  access_key cred("AWS_ACCESS_KEY_ID")
+  secret_key cred("AWS_SECRET_ACCESS_KEY")
+end
+
+###############################################################################
+# Resources
+###############################################################################
 
 #
 # Change ne: to eq: and filter for AWS only
@@ -99,7 +155,10 @@ resources "instances", type: "rs_cm.instances" do
   tags all(any($param_instance_tag_list), "rs_agent:type=right_link_lite",none("rs_downsize:cooldown=*"))
 end
 
-#Generates list of Regions
+###############################################################################
+# Datasources
+###############################################################################
+
 datasource "ds_regions_list" do
   request do
     verb "GET"
@@ -112,6 +171,109 @@ end
 datasource "ds_instance_type_memory", type: "javascript" do
   run_script $js_instance_type_memory, @instance_types
 end
+
+datasource "ds_instances" do
+  iterate @instances
+  field "resource_uid", val(iter_item,  "resource_uid")
+  field "name", val(iter_item, "name")
+  field "href", href(iter_item)
+  field "instance_type", val(iter_item, "instance_type")
+  field "tags", val(iter_item,"tags")
+end
+
+datasource "ds_instances_16" do
+  iterate(@clouds)
+  request do
+    auth $auth_rs
+    verb "GET"
+    host rs_cm_host
+    path join([href(iter_item), "/instances"])
+    header "X-Api-Version", "1.6"
+    header "X-Account", to_s(rs_project_id)
+  end
+  result do
+    encoding "json"
+    collect jmes_path(response, "[*]") do
+      field "account", jmes_path(col_item, "links.account.id")
+      field "cloud_id", jmes_path(col_item, "links.cloud.id")
+      field "href", jmes_path(col_item, "href")
+      field "name", jmes_path(col_item,"name")
+      field "description", jmes_path(col_item, "description")
+      field "legacy_id", to_n(jmes_path(col_item,"legacy_id"))
+      field "instance_type", jmes_path(col_item, "links.instance_type.name")
+      field "region", jmes_path(col_item, "links.cloud.region")
+      field "cloud_type", jmes_path(col_item, "links.cloud.cloud_type")
+    end
+  end
+end
+
+datasource "ds_filtered_instances" do
+  run_script $js_filter_instances, $ds_instances, $ds_instances_16, $ds_instance_size_map, $ds_instance_type_memory
+end
+
+# Importing instance types that are approved by sap with rough estimated costs.
+datasource "ds_instance_size_map" do
+  request do
+    auth $my_aws_auth
+    host "s3.amazonaws.com"
+    verb "GET"
+    path "rightscale-cft-templates/instance_types_cost_sap.json"
+  end
+end
+
+datasource "ds_instance_metrics_free_memory" do
+  iterate($ds_filtered_instances)
+  request do
+    auth $auth_rs
+    host rs_cm_host
+    path join([val(iter_item,"href"), "/monitoring_metrics/memory:memory-free/data"])
+    query "start", "-300"
+    query "end", "0"
+    header "X-API-Version", "1.5"
+  end
+  result do
+    field "href",               val(iter_item,"href")
+    field "memory_data_points", jmes_path(response, "variables_data[0].points[*]")
+    field "account",            val(iter_item,"account")
+    field "resource_uid",       val(iter_item,"resource_uid")
+    field "instance_type",      val(iter_item,"instance_type")
+    field "total_memory",       val(iter_item, "total_memory")
+    field "name",               val(iter_item,"name")
+    field "legacy_id",          val(iter_item,"legacy_id")
+    field "cloud_id",           val(iter_item,"cloud_id")
+    field "region",             val(iter_item,"region")
+    field "cloud_type",         val(iter_item,"cloud_type")
+    field "next_instance_size", val(iter_item,"next_instance_size")
+    field "tags",               val(iter_item,"tags")
+  end
+end
+
+datasource "ds_instance_metrics_cpu" do
+  iterate($ds_filtered_instances)
+  request do
+    auth $auth_rs
+    host rs_cm_host
+    path join([val(iter_item,"href"), "/monitoring_metrics/cpu-0:cpu-idle/data"])
+    query "start", "-300"
+    query "end", "0"
+    header "X-API-Version", "1.5"
+  end
+  result do
+    field "href",        val(iter_item,"href")
+    field "data_points", jmes_path(response, "variables_data[0].points[*]")
+    field "resource_uid",          val(iter_item,"resource_uid")
+    field "instance_type",        val(iter_item,"instance_type")
+    field "name",        val(iter_item,"name")
+  end
+end
+
+datasource "ds_instances_with_calculated_metrics" do
+  run_script $js_calculate_metrics, $ds_instance_metrics_free_memory, $ds_instance_metrics_cpu, $ds_instance_metrics_network_interface_eth0, $ds_instance_metrics_network_interface_Amazon_Elastic_Network_Adapter, $ds_instance_metrics_network_interface_Intel_R_82599, $ds_instance_metrics_network_interface_AWS_PV_Network_Device,$ds_instance_size_map
+end
+
+###############################################################################
+# Scripts
+###############################################################################
 
 script "js_cloudwatch_cpu_usage", type: "javascript" do
   result "results"
@@ -189,7 +351,6 @@ script "js_cloudwatch_mem_usage", type: "javascript" do
   }
 EOS
 end
-
 
 script "js_cloudwatch_windows_memory_usage", type: "javascript" do
   result "results"
@@ -313,63 +474,6 @@ for (m = 0; m < instance_types.length; m++) {
 EOS
 end
 
-datasource "ds_instances" do
-  iterate @instances
-  field "resource_uid", val(iter_item,  "resource_uid")
-  field "name", val(iter_item, "name")
-  field "href", href(iter_item)
-  field "instance_type", val(iter_item, "instance_type")
-  field "tags", val(iter_item,"tags")
-end
-
-datasource "ds_instances_16" do
-  iterate(@clouds)
-  request do
-    auth $auth_rs
-    verb "GET"
-    host rs_cm_host
-    path join([href(iter_item), "/instances"])
-    header "X-Api-Version", "1.6"
-    header "X-Account", to_s(rs_project_id)
-  end
-  result do
-    encoding "json"
-    collect jmes_path(response, "[*]") do
-      field "account", jmes_path(col_item, "links.account.id")
-      field "cloud_id", jmes_path(col_item, "links.cloud.id")
-      field "href", jmes_path(col_item, "href")
-      field "name", jmes_path(col_item,"name")
-      field "description", jmes_path(col_item, "description")
-      field "legacy_id", to_n(jmes_path(col_item,"legacy_id"))
-      field "instance_type", jmes_path(col_item, "links.instance_type.name")
-      field "region", jmes_path(col_item, "links.cloud.region")
-      field "cloud_type", jmes_path(col_item, "links.cloud.cloud_type")
-    end
-  end
-end
-
-datasource "ds_filtered_instances" do
-  run_script $js_filter_instances, $ds_instances, $ds_instances_16, $ds_instance_size_map, $ds_instance_type_memory
-end
-
-auth "my_aws_auth", type: "aws" do
-  version 4
-  service "s3"
-  region "us-east-1"
-  access_key cred("AWS_ACCESS_KEY_ID")
-  secret_key cred("AWS_SECRET_ACCESS_KEY")
-end
-
-# Importing instance types that are approved by sap with rough estimated costs.
-datasource "ds_instance_size_map" do
-  request do
-    auth $my_aws_auth
-    host "s3.amazonaws.com"
-    verb "GET"
-    path "rightscale-cft-templates/instance_types_cost_sap.json"
-  end
-end
-
 script "js_filter_instances", type: "javascript" do
   parameters "instances", "instances16", "instance_size_map", "instance_type_memory"
   result "filtered_instances"
@@ -418,15 +522,14 @@ for ( i = 0; i < instances.length; i++ ) {
     continue;
   }
   else {
+    #
+    # We need to determine here if were looking at moving up or down
+    # Where does instance_size_map come from?
+    #
 
-      #
-      # We need to determine here if we're looking at moving up or down
-      # Where does instance_size_map come from?
-      #
-
-  var next_instance_size = instance_size_map["clouds"][cloud_type.toString()][instance_type.toString()]["down"]
-  if (!next_instance_size) { next_instance_size = "N/A" }
-  filtered_instances.push(
+    var next_instance_size = instance_size_map["clouds"][cloud_type.toString()][instance_type.toString()]["down"]
+    if (!next_instance_size) { next_instance_size = "N/A" }
+    filtered_instances.push(
     {
       account: account,
       resource_uid: instances[i]["resource_uid"],
@@ -442,60 +545,10 @@ for ( i = 0; i < instances.length; i++ ) {
       tags: instances[i]["tags"],
       next_instance_size: next_instance_size
     }
-  )
+    )
   }
 };
 EOS
-end
-
-datasource "ds_instance_metrics_free_memory" do
-  iterate($ds_filtered_instances)
-  request do
-    auth $auth_rs
-    host rs_cm_host
-    path join([val(iter_item,"href"), "/monitoring_metrics/memory:memory-free/data"])
-    query "start", "-300"
-    query "end", "0"
-    header "X-API-Version", "1.5"
-  end
-  result do
-    field "href",               val(iter_item,"href")
-    field "memory_data_points", jmes_path(response, "variables_data[0].points[*]")
-    field "account",            val(iter_item,"account")
-    field "resource_uid",       val(iter_item,"resource_uid")
-    field "instance_type",      val(iter_item,"instance_type")
-    field "total_memory",       val(iter_item, "total_memory")
-    field "name",               val(iter_item,"name")
-    field "legacy_id",          val(iter_item,"legacy_id")
-    field "cloud_id",           val(iter_item,"cloud_id")
-    field "region",             val(iter_item,"region")
-    field "cloud_type",         val(iter_item,"cloud_type")
-    field "next_instance_size", val(iter_item,"next_instance_size")
-    field "tags",               val(iter_item,"tags")
-  end
-end
-
-datasource "ds_instance_metrics_cpu" do
-  iterate($ds_filtered_instances)
-  request do
-    auth $auth_rs
-    host rs_cm_host
-    path join([val(iter_item,"href"), "/monitoring_metrics/cpu-0:cpu-idle/data"])
-    query "start", "-300"
-    query "end", "0"
-    header "X-API-Version", "1.5"
-  end
-  result do
-    field "href",        val(iter_item,"href")
-    field "data_points", jmes_path(response, "variables_data[0].points[*]")
-    field "resource_uid",          val(iter_item,"resource_uid")
-    field "instance_type",        val(iter_item,"instance_type")
-    field "name",        val(iter_item,"name")
-  end
-end
-
-datasource "ds_instances_with_calculated_metrics" do
-  run_script $js_calculate_metrics, $ds_instance_metrics_free_memory, $ds_instance_metrics_cpu, $ds_instance_metrics_network_interface_eth0, $ds_instance_metrics_network_interface_Amazon_Elastic_Network_Adapter, $ds_instance_metrics_network_interface_Intel_R_82599, $ds_instance_metrics_network_interface_AWS_PV_Network_Device,$ds_instance_size_map
 end
 
 script "js_calculate_metrics", type: "javascript" do
@@ -592,11 +645,17 @@ for ( var i = 0; i < calculated_instances.length; i++ ) {
 EOS
 end
 
-
+###############################################################################
+# Resolutions
+###############################################################################
 
 resolution "report_downsize_instances_resolution" do
   email $param_email
 end
+
+###############################################################################
+# Escalations
+###############################################################################
 
 escalation "report_downsize_instances" do
   email $param_email
@@ -606,6 +665,9 @@ end
 #   run "downsize_instances", data, $param_alert_options, $param_instance_tag_list, $param_cooldown_days
 # end
 
+###############################################################################
+# Cloud Workflows
+###############################################################################
 
 define downsize_instances($data,$param_alert_options,$param_instance_tag_list,$param_cooldown_days) do
   if $param_alert_options != "Email"
@@ -649,6 +711,10 @@ define downsize_instances($data,$param_alert_options,$param_instance_tag_list,$p
     end
   end
 end
+
+###############################################################################
+# Policy
+###############################################################################
 
 policy "policy_rightsize" do
   validate_each $ds_instances_with_calculated_metrics do
