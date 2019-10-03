@@ -1,4 +1,4 @@
-name "Azure AHUB Utilization with Manual Entry"
+name "Azure AHUB Utilization with Manual Entry -- With Choices"
 rs_pt_ver 20180301
 type "policy"
 short_description "Report when AHUB usage in Azure falls outside or inside the number of licenses specified by the user. \n See the [README](https://github.com/flexera/policy_templates/tree/master/compliance/azure/ahub_manual) and [docs.rightscale.com/policies](http://docs.rightscale.com/policies/) to learn more."
@@ -10,16 +10,11 @@ severity "medium"
 # Parameters
 ###############################################################################
 
-parameter "param_azure_tenant_id" do
-  type "string"
-  label "Azure AD Tenant ID"
-  category "Azure"
-end
-
 parameter "param_azure_sub" do
-  type "string"
+  type "array"
   label "Azure Subscription ID"
   category "Azure"
+  choices $ds_azure_subscriptions
 end
 
 parameter "param_exclusion_tag_key" do
@@ -47,15 +42,11 @@ end
 # Authentication
 ###############################################################################
 
-auth "azure_auth", type: "oauth2" do
-  token_url join(["https://login.microsoftonline.com/",$param_azure_tenant_id,"/oauth2/token"])
-  grant type: "client_credentials" do
-    client_id cred("AZURE_APPLICATION_ID")
-    client_secret cred("AZURE_APPLICATION_KEY")
-    additional_params do {
-      "resource" => "https://management.azure.com/"
-    } end
-  end
+credentials "azure_auth" do
+  types "oauth2"
+  label "Azure credentials"
+  description "Select azure credentials with read/write access to virtualmachines in management.azure.com resource."
+  tags "cloud=azure"
 end
 
 ###############################################################################
@@ -71,17 +62,42 @@ pagination "azure_pagination" do
   end
 end
 
+
 ###############################################################################
 # Datasources
 ###############################################################################
 
-#https://docs.microsoft.com/en-us/rest/api/compute/virtualmachines/listall
-datasource "ds_azure_instances" do
+datasource "ds_azure_subscriptions" do
   request do
     auth $azure_auth
     pagination $azure_pagination
     host "management.azure.com"
-    path join(["/subscriptions/", $param_azure_sub, "/providers/Microsoft.Compute/virtualMachines"])
+    path "/subscriptions"
+    query "api-version","2016-06-01"
+    header "User-Agent", "RS Policies"
+  end
+  result do
+    encoding "json"
+    collect jmes_path(response, "value[*]") do
+      field "label", jmes_path(col_item,"displayName")
+      field "value", jmes_path(col_item,"subscriptionId")
+    end
+  end
+end
+
+datasource "ds_chosen_subscriptions" do
+  run_script $js_choose_subscriptions, $ds_azure_subscriptions, $param_azure_sub
+end
+
+
+#https://docs.microsoft.com/en-us/rest/api/compute/virtualmachines/listall
+datasource "ds_azure_instances" do
+  iterate $ds_chosen_subscriptions
+  request do
+    auth $azure_auth
+    pagination $azure_pagination
+    host "management.azure.com"
+    path join(["/subscriptions/", val(iter_item, "subscriptionId"), "/providers/Microsoft.Compute/virtualMachines"])
     query "api-version","2018-06-01"
     header "User-Agent", "RS Policies"
   end
@@ -89,6 +105,7 @@ datasource "ds_azure_instances" do
     encoding "json"
     collect jmes_path(response, "value") do
       field "id", jmes_path(col_item,"id")
+      field "subscriptionId", val(iter_item, "subscriptionId")
       field "name", jmes_path(col_item,"name")
       field "location", jmes_path(col_item,"location")
       field "licenseType", jmes_path(col_item,"properties.licenseType")
@@ -109,11 +126,11 @@ end
 
 #https://docs.microsoft.com/en-us/rest/api/compute/virtualmachinesizes/list
 datasource "ds_azure_vmsize" do
-iterate $ds_filtered_locations
+  iterate $ds_filtered_locations
   request do
     auth $azure_auth
     host "management.azure.com"
-    path join(["/subscriptions/", $param_azure_sub, "/providers/Microsoft.Compute/locations/",val(iter_item, "location"),"/vmSizes"])
+    path join(["/subscriptions/", val(iter_item, "subscriptionId"), "/providers/Microsoft.Compute/locations/",val(iter_item, "location"),"/vmSizes"])
     query "api-version","2018-06-01"
     header "User-Agent", "RS Policies"
   end
@@ -134,6 +151,15 @@ end
 ###############################################################################
 # Scripts
 ###############################################################################
+
+script "js_choose_subscriptions", type: "javascript" do
+  parameters "ds_azure_subscriptions", "param_azure_sub"
+  result "subscriptions"
+  code <<-EOF
+    // code omitted -- build an array of objects with {subscriptionId: <val>} from param_azure_sub
+  end
+end
+
 
 script "js_location_list", type: "javascript" do
   parameters "ds_azure_instances"
@@ -218,7 +244,7 @@ script "js_vminstances_with_cores", type: "javascript" do
         }
       }
     })
-	
+  
     var vm = "VM's";
     if(total_vms_with_ahub > license_ahub || total_cores_with_ahub > license_cores){    
       result=with_ahub;
@@ -229,27 +255,27 @@ script "js_vminstances_with_cores", type: "javascript" do
         final_result={note:"It is observed that a greater number of licenses have been consumed than allocated licenses, Please disable AHUB for any of the "+(total_vms_with_ahub - license_ahub)+" "+vm+" listed above whose sum of cores should be minimum "+(total_cores_with_ahub - license_cores)+" cores.",
           result:result,
           summary_template: total_vms_with_ahub+" "+vm+" with AHUB enabled whose sum of cores is "+total_cores_with_ahub
-	    };
+      };
       }else if(total_cores_with_ahub < license_cores && total_vms_with_ahub > license_ahub){
         final_result={note:"It is observed that a greater number of licenses have been consumed than allocated licenses, Please disable AHUB for any of the "+(total_vms_with_ahub - license_ahub)+" "+vm+" listed above.",
           result:result,
           summary_template: total_vms_with_ahub+" "+vm+" with AHUB enabled whose sum of cores is "+total_cores_with_ahub
-	    };
-	  }else if(total_cores_with_ahub > license_cores && total_vms_with_ahub < license_ahub){
+      };
+    }else if(total_cores_with_ahub > license_cores && total_vms_with_ahub < license_ahub){
         final_result={note:"It is observed that a greater number of licenses have been consumed than allocated licenses, Please disable AHUB for VMs listed above whose sum of cores should be minimum "+(total_cores_with_ahub - license_cores)+" cores.",
           result:result,
           summary_template: total_vms_with_ahub+" "+vm+" with AHUB enabled whose sum of cores is "+total_cores_with_ahub
-	    };
-	  }
+      };
+    }
     }else if(total_cores_with_ahub < license_cores && total_vms_with_ahub < license_ahub){
       result=without_ahub;
-	  if(total_vms_without_ahub == 1){
+    if(total_vms_without_ahub == 1){
         vm = "VM";
-	  }
+    }
       final_result={note:"It is observed that a lesser number of licenses have been consumed than allocated licenses, You can enable AHUB upto "+(license_ahub - total_vms_with_ahub)+" "+vm+" whose sum of cores should be lesser or equal to "+(license_cores - total_cores_with_ahub)+" cores.",
         result:result,
         summary_template: total_vms_without_ahub+" "+vm+" with AHUB disabled"
-	  };
+    };
     }else{
       final_result={result:result};
     }
