@@ -14,7 +14,7 @@ parameter "param_azure_sub" do
   type "array"
   label "Azure Subscription ID"
   category "Azure"
-  choices $ds_azure_subscriptions
+  populate_from $ds_azure_subscriptions
 end
 
 parameter "param_exclusion_tag_key" do
