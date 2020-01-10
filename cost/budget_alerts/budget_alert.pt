@@ -508,6 +508,15 @@ policy "budget_alert" do
 | {{ .name }} | {{.budget}} | {{.actual}}  | {{.forecastedSpend}} | {{.runrate}} | {{.overBudgetAmount}} | {{.overBudgetPercent}} | {{.id}} | 
 {{ end -}}
 
+export do
+  field "actual"
+  field "runrate"
+  field "monthYear"
+  field "report_data" do
+    field_path "reportData"
+  end
+end
+
 EOS
     escalate $esc_budget_alert
     check lt(val(data,"total"),$param_monthly_budget)

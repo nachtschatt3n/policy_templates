@@ -16,49 +16,12 @@ parameter "param_email" do
   description "Email addresses of the recipients you wish to notify when new incidents are created."
 end
 
-parameter "param_azure_tenant_id" do
-  type "string"
-  label "Azure AD Tenant ID"
-  description "The Azure AD Tenant ID used for the Azure API Authentication."
-  category "Azure"
+credential "azure_auth" do
+  schemes "oauth"
+  label "Azure Auth"
+  tags ...
 end
 
-parameter "param_azure_sub" do
-  type "string"
-  label "Azure Subscription ID"
-  description "The Azure Subscription ID used for the Azure API."
-  category "Azure"
-end
-
-parameter "param_exclusion_tag_key" do
-  type "string"
-  category "User Inputs"
-  label "Exclusion Tag Key"
-  description "Azure-native SQL Database tag key to ignore databases. Only supply the tag key. The policy assumes that the tag value is irrelevant."
-end
-
-###############################################################################
-# Permissions
-###############################################################################
-
-permission "perm_read_creds" do
-  actions   "rs_cm.show_sensitive","rs_cm.index_sensitive"
-  resources "rs_cm.credentials"
-end
-
-###############################################################################
-# Authentication
-###############################################################################
-auth "azure_auth", type: "oauth2" do
-  token_url join(["https://login.microsoftonline.com/",$param_azure_tenant_id,"/oauth2/token"])
-  grant type: "client_credentials" do
-    client_id cred("AZURE_APPLICATION_ID")
-    client_secret cred("AZURE_APPLICATION_KEY")
-    additional_params do {
-      "resource" => "https://management.azure.com/"
-    } end
-  end
-end
 
 ###############################################################################
 # Pagination
@@ -189,7 +152,7 @@ script "js_merged_metrics", type: "javascript" do
         }
         //now find the metrics for the devices
         var objMetric = databases_metrics[i];
-		var total = 0;
+        var total = 0;
         if (typeof objMetric == "object" && typeof objMetric.timeseries[0].data == "object"){
           var ts_data =  objMetric.timeseries[0].data;
           for (x=0; x < ts_data.length; x++) {
@@ -198,7 +161,7 @@ script "js_merged_metrics", type: "javascript" do
           if(total == 0){
             result.push({
               id: databases_metrics[i].id,
-		      location: databases_metrics[i].location,
+              location: databases_metrics[i].location,
               name: databases_metrics[i].name,
               resource_group: resource_group,
               kind: databases_metrics[i].kind,
@@ -218,45 +181,63 @@ end
 ###############################################################################
 
 policy "policy_azure_db_utilization" do
-  validate $ds_merged_metrics do
-    summary_template "{{ rs_project_name }} (Account ID: {{ rs_project_id }}): {{ len data }} Azure Unused SQL Databases"
+  validate_each $ds_merged_metrics do
+    summary_template "{{ len data }} Azure Unused SQL Databases"
+    export do
+      # id is REQUIRED for validate_each calls
+      field "id" do
+        label "ID"
+      end
+      field "location" do
+        label "Region"
+      end
+      field "name" do
+        label "Name"
+      end
+      field "name" do
+        label "Name"
+      end
+      field "resource_group" do
+        label "Resource Group"
+      end
+      field "kind" do
+        label "Kind"
+      end
+      field "type" do
+        label "Type"
+      end
+      field "sku_name" do
+        label "SKU - Name"
+        field_path jmes_path("sku.name") #jmes_path
+      end
+      field "sku_tier" do
+        label "SKU - Tier"
+        field_path jmes_path"(sku.name")
+      end
+      field "sku_capacity" do
+        label "SKU - Capacity"
+        field_path jmes_path("sku.capacity")
+      end
+    end
+    .. OR ..
+    export do
+        field "id", val(iter_item, "id"), "ID"
+        field "location", val(iter_item, "location"), "Region"
+        field "name", val(iter_item, "name"), "Name"
+      end
+    end
     detail_template <<-EOS
 # Azure Unused SQL Databases
-
-| Region | Name | Resource Group | Kind | Type | SKU - Name | SKU - Tier | SKU - Capacity |
-| ------ | ---- | -------------- | ---- | ---- | -----------| ---------- | -------------- |
-{{ range data -}}
-| {{.location}} | {{.name}} | {{.resource_group}} | {{.kind}} | {{.type}} | {{.sku.name}} | {{.sku.tier}} | {{.sku.capacity}} |
-{{ end -}}
-
-___
-###### Policy Applied in Account: {{ rs_project_name }} (Account ID: {{ rs_project_id }}) within Org: {{ rs_org_name }} (Org ID: {{ rs_org_id }})
+### Policy Applied in Account: {{ rs_project_name }} (Account ID: {{ rs_project_id }}) within Org: {{ rs_org_name }} (Org ID: {{ rs_org_id }})
+{{ data_table }}
 EOS
-    escalate $esc_email_report
     escalate $esc_delete_unused_sql_databases_approval
     check eq(size(data), 0)
   end
 end
 
-###############################################################################
-# Escalations
-###############################################################################
-
-escalation "esc_email_report" do
-  email $param_email
-end
-
-escalation "esc_delete_unused_sql_databases_approval" do
-  request_approval do
-    label "Approve resource Delete"
-    description "Approve escalation to run RightScale Cloud Workflow to delete unused SQL databases."
-    parameter "approval_resion" do
-      type "string"
-      label "Reason for Approval"
-      description "Explain why are you approving the action."
-    end
-  end
-  run "delete_unused_sql_databases", data, $param_azure_tenant_id
+action "delete_unused_sql_databases" do
+  run "delete_unused_sql_databases", data
 end
 
 ###############################################################################
