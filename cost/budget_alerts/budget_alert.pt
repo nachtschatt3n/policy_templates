@@ -501,14 +501,34 @@ policy "budget_alert" do
 ### Monthly Spend for {{ data.monthYear }}
 
 ![Spending Overview Chart](https://image-charts.com/chart?{{ data.chartType }}&{{ data.chartData }}&{{ data.chartSize }}&{{ data.chartTitle }}&{{ data.chartImage }}&{{ data.chartColor }}&{{ data.chartLebel }}&{{ data.chartYAxisLebel }}&{{ data.chartYAxis }}&{{ data.chartLebelPosition }}&{{data.chartDataAutoScale}}&{{data.chartDataValue}} "Actual v. Monthly Cost Report")
-
-| Billing Center Name | Budget | Month to Date Spend | Additional Forecasted Spend | Forecasted Full Month Spend | Over Budget Amount | Over Budget Percent | Billing Center ID | 
-{{ range data.reportData -}}
-| :-----------------: | -----: | ------------------: | --------------------------: | --------------------------: | -----------------: | :-----------------: | :---------------: |
-| {{ .name }} | {{.budget}} | {{.actual}}  | {{.forecastedSpend}} | {{.runrate}} | {{.overBudgetAmount}} | {{.overBudgetPercent}} | {{.id}} | 
-{{ end -}}
-
 EOS
+    export "reportData" do
+      field "name" do
+        label "Billing Center Name"
+      end
+      field "budget" do
+        label "Budget"
+      end
+      field "actual" do 
+        label "Month to Date Spend"
+      end
+      field "forecastedSpend" do
+        label "Additional Forecasted Spend"
+      end
+      field "runrate" do
+        label "Forecasted Full Month Spend"
+      end
+      field "overBudgetAmount" do
+        label "Over Budget Amount"
+      end
+      field "overBudgetPercent" do
+        label "Over Budget Percent"
+      end
+      field "id" do
+        label "Billing Center ID"
+      end
+    end
+    
     escalate $esc_budget_alert
     check lt(val(data,"total"),$param_monthly_budget)
   end
