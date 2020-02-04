@@ -170,18 +170,38 @@ end
 policy "pol_sql_managed_instances" do
   validate_each $ds_sql_managed_instances do
     summary_template "{{ rs_project_name }} (Account ID: {{ rs_project_id }}): {{ len data }} Azure SQL managed instances with public endpoint enabled"
-    detail_template <<-EOS
-# Azure SQL managed Instance Details
-| Subscription Name | Name | Location | Instance State | License Type | vCores | Storage Size In GB | Tags |
-| ----------------- | ------| -------- | -------------- | ------------ | ------ | ------------------ | ---- |
-{{ range data -}}
-| {{.subscriptionName}} | {{.name}} | {{.location}} | {{.instance_state}} | {{.license_type}} | {{.v_cores}} | {{.storage_size_in_gb}} | {{.tags}} |
-{{ end -}}
-    EOS
+    export do
+      field "id" do
+        label "ID"
+      end
+      field "subscriptionName"
+        label "Subscription Name"
+      end
+      field "name"
+        label "Name"
+      end
+      field "location"
+        label "Location"
+      end
+      field "instance_state"
+        label "Instance State"
+      end
+      field "license_type"
+        label "License Type"
+      end
+      field "v_cores"
+        label "vCores"
+      end
+      field "storage_size_in_gb"
+        label "Storage Size In GB"
+      end
+      field "tags"
+        label "Tags"
+      end
+    end
     escalate $esc_report_Managed_instances
-    escalate $esc_disable_public_endpoint_approval
-#Note: Uncomment below line(remove '#') to enable Delete action And comment above line (add '#' at beginning) when you enable Delete action.
-    #escalate $esc_delete_Managed_instances_approval
+    escalate $esc_disable_public_endpoint
+    escalate $esc_delete_Managed_instances
     check logic_not(val(item,"isPublicDataEndpointEnabled"))
   end
 end
@@ -191,31 +211,32 @@ end
 ###############################################################################
 
 escalation "esc_report_Managed_instances" do
+  # implied: automatic true. It defaults to true for backwards compatibility purposes.
   email $param_email
 end
 
-escalation "esc_disable_public_endpoint_approval" do
-  request_approval do
-    label "Approve resource Update"
-    description "Approve esclation to run RightScale Cloud Workflow to disable public endpoint"
-    parameter "approval_resion" do
-      type "string"
-      label "Reason for Approval"
-      description "Explain why are you approving the action."
-    end
+escalation "esc_disable_public_endpoint" do
+  automatic false
+  parameter "ids" do
+    type "string"
+    label "List of IDs"
+    description "A list of with a public endpoint to disable."
+  end
+  parameter "approval_reason" do
+    type "string"
+    label "Reason for Approval"
+    description "Explain why are you approving the action."
   end
   run "esc_disable_public_endpoint", data
 end
 
-escalation "esc_delete_Managed_instances_approval" do
-  request_approval do
-    label "Approve resource Delete"
-    description "Approve escalation to run RightScale Cloud Workflow to delete SQL managed instance with public endpoint enabled."
-    parameter "approval_resion" do
-      type "string"
-      label "Reason for Approval"
-      description "Explain why are you approving the action."
-    end
+escalation "esc_delete_Managed_instances" do
+  automatic false
+  resource_level true
+  parameter "approval_reason" do
+    type "string"
+    label "Reason for Approval"
+    description "Explain why are you approving the action."
   end
   run "ecs_delete_Managed_instances", data
 end
