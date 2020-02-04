@@ -232,6 +232,8 @@ end
 
 escalation "esc_delete_Managed_instances" do
   automatic false
+  # We can have an explicit flag "resource_level" true which will inject an an "ids" parameter for you. Or just the user create an "ids" parameter like above.
+  # This "ids" parameter will have to be slightly magical in that it turns on the resource granularity actions for this policy by implication....
   resource_level true
   parameter "approval_reason" do
     type "string"
