@@ -172,7 +172,11 @@ policy "pol_sql_managed_instances" do
     summary_template "{{ rs_project_name }} (Account ID: {{ rs_project_id }}): {{ len data }} Azure SQL managed instances with public endpoint enabled"
     # Define how 
     export do
-      # Field name. "id" is th ename of the field in the data structure
+      # Says that this data is resource level data, which does a few behavior changes:
+      #   There must be and id field, the field values should be unique
+      #   Any actions will automatically get an "ids" parameter and other semantic changes
+      resource_level true
+      # Field name. "id" is the of the field in the data structure
       field "id" do
         # Label is optional and for display purposes -- we default to th field name otherwise.
         label "ID"
@@ -247,7 +251,6 @@ escalation "esc_delete_Managed_instances" do
   automatic false
   # We can have an explicit flag "resource_level" true which will inject an an "ids" parameter for you. Or just the user create an "ids" parameter like above.
   # This "ids" parameter will have to be slightly magical in that it turns on the resource granularity actions for this policy by implication....
-  resource_level true
   parameter "approval_reason" do
     type "string"
     label "Reason for Approval"
