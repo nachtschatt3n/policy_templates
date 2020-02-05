@@ -237,7 +237,10 @@ end
 policy "policy_azure_db_utilization" do
   validate $ds_merged_metrics do
     summary_template "{{ rs_project_name }} (Account ID: {{ rs_project_id }}): {{ len data }} Azure Unused SQL Databases"
+    # Detail template is now optional. If detail_template is specified, it will be display above the data table and can
+    # be used for display summary information, etc....
     export do
+      # For resource_level selections, we need a field called ID. ID values should be unique
       field "id" do
         label "ID"
       end
@@ -261,6 +264,9 @@ policy "policy_azure_db_utilization" do
       end
       field "sku_name" do
         label "SKU - Name"
+        # path can be used to extract subpaths or alias one field to another. This is mostly
+        # here to ease transition a bit, try not to use this if you can and just properly
+        # name the field in javascript code if possible.
         path "sku.name"
       end
       field "sku_tier" do

@@ -502,7 +502,12 @@ policy "budget_alert" do
 
 ![Spending Overview Chart](https://image-charts.com/chart?{{ data.chartType }}&{{ data.chartData }}&{{ data.chartSize }}&{{ data.chartTitle }}&{{ data.chartImage }}&{{ data.chartColor }}&{{ data.chartLebel }}&{{ data.chartYAxisLebel }}&{{ data.chartYAxis }}&{{ data.chartLebelPosition }}&{{data.chartDataAutoScale}}&{{data.chartDataValue}} "Actual v. Monthly Cost Report")
 EOS
+    # If a value is passed as first parameter of export, we'll extract that subpath into a table.
+    # reportData in this case is a subpath in that field. detail_template will still be displayed above the table.
     export "reportData" do
+      field "id" do
+        label "Billing Center ID"
+      end
       field "name" do
         label "Billing Center Name"
       end
@@ -511,6 +516,16 @@ EOS
       end
       field "actual" do 
         label "Month to Date Spend"
+        # Format is a directive that describes the type of the data this contains and/or how to format it.
+        # The UI consumes the format. Up to content team to define the structure of this. The only consumer
+        # of this is the UI which have to add code for anything that content developers might want. Some ideas:
+        #   * can do semantic meanings like "currency" or "us currency" which the UI would consume and know
+        #     that the data should be right justified to two decimal places
+        #   * can also consider css style directives like "right", "left", "center" and/or sprintf style formatting
+        #     directives like "%0.2f" to format a float to two decimal places.
+        format "currency"
+        # or ...
+        format "right $%.2f"
       end
       field "forecastedSpend" do
         label "Additional Forecasted Spend"
@@ -524,9 +539,7 @@ EOS
       field "overBudgetPercent" do
         label "Over Budget Percent"
       end
-      field "id" do
-        label "Billing Center ID"
-      end
+
     end
     
     escalate $esc_budget_alert

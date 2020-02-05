@@ -170,8 +170,11 @@ end
 policy "pol_sql_managed_instances" do
   validate_each $ds_sql_managed_instances do
     summary_template "{{ rs_project_name }} (Account ID: {{ rs_project_id }}): {{ len data }} Azure SQL managed instances with public endpoint enabled"
+    # Define how 
     export do
+      # Field name. "id" is th ename of the field in the data structure
       field "id" do
+        # Label is optional and for display purposes -- we default to th field name otherwise.
         label "ID"
       end
       field "subscriptionName"
@@ -194,6 +197,16 @@ policy "pol_sql_managed_instances" do
       end
       field "storage_size_in_gb"
         label "Storage Size In GB"
+        # Format is a directive that describes the type of the data this contains and/or how to format it.
+        # The UI consumes the format. Up to content team to define the structure of this. The only consumer
+        # of this is the UI which have to add code for anything that content developers might want. Some ideas:
+        #   * can do semantic meanings like "currency" or "us currency" which the UI would consume and know
+        #     that the data should be right justified to two decimal places
+        #   * can also consider css style directives like "right", "left", "center" and/or sprintf style formatting
+        #     directives like "%0.2f" to format a float to two decimal places.
+        format "size"
+        # or ...
+        format "right"
       end
       field "tags"
         label "Tags"
