@@ -240,6 +240,10 @@ policy "policy_azure_db_utilization" do
     # Detail template is now optional. If detail_template is specified, it will be display above the data table and can
     # be used for display summary information, etc....
     export do
+      # Says that this data is resource level data, which does a few behavior changes:
+      #   There must be and id field, the field values should be unique
+      #   Any actions will automatically get an "ids" parameter and other semantic changes
+      resource_level true
       # For resource_level selections, we need a field called ID. ID values should be unique
       field "id" do
         label "ID"

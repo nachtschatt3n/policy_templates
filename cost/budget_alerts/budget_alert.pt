@@ -505,6 +505,8 @@ EOS
     # If a value is passed as first parameter of export, we'll extract that subpath into a table.
     # reportData in this case is a subpath in that field. detail_template will still be displayed above the table.
     export "reportData" do
+      # Says that this data is not resource level data (the default)
+      resource_level false
       field "id" do
         label "Billing Center ID"
       end
