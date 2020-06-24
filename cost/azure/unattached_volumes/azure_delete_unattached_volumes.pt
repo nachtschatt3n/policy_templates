@@ -112,7 +112,7 @@ datasource "ds_azure_disks" do
       field "tags", jmes_path(col_item,"tags")
       field "diskState", jmes_path(col_item,"properties.diskState")
       field "timeCreated", jmes_path(col_item,"properties.timeCreated")
-	  field "diskSize", jmes_path(col_item,"properties.diskSizeGB")
+    field "diskSize", jmes_path(col_item,"properties.diskSizeGB")
       field "subscriptionId",val(iter_item,"subscriptionId")
       field "subscriptionName",val(iter_item,"displayName")
     end
@@ -149,56 +149,6 @@ end
 # Scripts
 ###############################################################################
 
-script "js_get_logactivity", type: "javascript" do
-  parameters "subscriptionId", "param_unattached_days"
-  result "results"
-  code <<-EOS
-
-    var currentDate=new Date();
-    var date1=currentDate.getFullYear()+'-'+(currentDate.getMonth()+1)+'-'+currentDate.getDate();
-    var expectedDate=new Date();
-    expectedDate.setDate(expectedDate.getDate()- parseInt(param_unattached_days));
-    var date2=expectedDate.getFullYear()+'-'+(expectedDate.getMonth()+1)+'-'+expectedDate.getDate();
-    var filter= "eventTimestamp ge '"+date2+"T00:00:00.6407898Z' and eventTimestamp le '"+date1+"T11:59:59.6407898Z'"
-    console.log("filter= "+filter);
-    
-	results = {
-      host: "management.azure.com",
-      path: "/subscriptions/"+subscriptionId+"/providers/microsoft.insights/eventtypes/management/values",
-      verb: 'GET',
-      auth: "azure_auth",
-      pagination: "azure_pagination",
-      query_params: {
-       'api-version': '2015-04-01',
-       '$filter': filter,
-       '$select': 'operationName,properties'
-      }
-    }
-  EOS
-end
-
-script "js_filter_activities", type: "javascript" do
-  parameters "ds_azure_log_activity"
-  result "res"
-  code <<-EOS
-   var res = [];
-   _.each(ds_azure_log_activity, function(activity){
-      var event=activity;
-      var responseBody=event['responseBody'];
-
-      if ((event['operationName']=='Create or Update Virtual Machine' || event['operationName']=='Microsoft.Compute/virtualMachines/write') && typeof responseBody != "undefined") {
-        if(responseBody.indexOf('toBeDetached')>-1){
-          var tobedetach=responseBody.substring(responseBody.indexOf('toBeDetached'), responseBody.indexOf('toBeDetached')+20);
-          if(tobedetach.indexOf('true')>-1){
-            res.push(responseBody)
-          }
-        }
-      }
-   })
-
-  EOS
-end
-
 script "js_filter_disks", type: "javascript" do
   parameters "param_exclusion_tag_key", "ds_azure_disks"
   result "res"
@@ -211,26 +161,32 @@ script "js_filter_disks", type: "javascript" do
             is_tag_matched=true
         }
       }
+      unattached_at = state_get("unattached_at", {})
       if(disk['diskState']=="Unattached" && (!is_tag_matched)){
+        if(!(disk['id'] in unattached_at)) {
+          unattached_at[disk['id']] = Date.now()
+        }
         res.push({
           disk_id:disk['id'],
           name:disk['name'],
           location:disk['location'],
           diskState:disk['diskState'],
-		  diskSize:disk['diskSize'],
+          diskSize:disk['diskSize'],
           timeCreated:disk['timeCreated'],
           subscriptionId:disk['subscriptionId'],
           subscriptionName:disk['subscriptionName'],
-		  tags:disk['tags']
+          tags:disk['tags'],
+          unattached_at:unattached_at[disk['id'],
         })
       }
+      state_store("unattached_at", unattached_at)
    })
 
   EOS
 end
 
 script "js_combineddata", type: "javascript" do
-parameters "ds_filter_activities", "ds_filter_disks", "param_unattached_days"
+parameters "ds_filter_disks", "param_unattached_days"
 result "results"
 code <<-EOS
   var results = []
@@ -244,19 +200,11 @@ code <<-EOS
     expectedDate.setDate(expectedDate.getDate()- parseInt(param_unattached_days));
     var diskId=disk['disk_id'];
     var diskName=disk['name'];
-	var tags = JSON.stringify(disk['tags']);
+    var tags = JSON.stringify(disk['tags']);
     var snapshot=diskId.substring(0,diskId.indexOf("Microsoft.Compute")+17)+"/snapshots/"+diskName+"Snapshot"
     console.log("snapshot name"+snapshot);
-    for(var i=0;i<activities.length;i++){
-      var activity=activities[i].toString();
-      if(activity.indexOf(diskId)>-1 && activity.indexOf('toBeDetached')>-1){
-        var diskString=activity.substring(activity.indexOf('toBeDetached')-300, activity.indexOf('toBeDetached'));
-        var tobedetach=activity.substring(activity.indexOf('toBeDetached'), activity.indexOf('toBeDetached')+20);
-        if(tobedetach.indexOf('true')>-1 && diskString.indexOf(diskId)>-1){
-		  ismatched=true;
-        }
-      }
-    }
+
+    # Insert javascript here to check unattached_at....
     if((!ismatched) && expectedDate.getTime()>=createdTime.getTime()){
         results.push({
           disk_id:disk['disk_id'],
@@ -266,7 +214,7 @@ code <<-EOS
           snapshotName:snapshot,
           subscriptionId:disk['subscriptionId'],
           subscriptionName:disk['subscriptionName'],
-		  tags:tags
+      tags:tags
         })
     }
   }
