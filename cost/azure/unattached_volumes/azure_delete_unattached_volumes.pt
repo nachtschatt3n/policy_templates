@@ -178,6 +178,8 @@ script "js_filter_disks", type: "javascript" do
           tags:disk['tags'],
           unattached_at:unattached_at[disk['id'],
         })
+      } else {
+        delete unattached_at[disk['id']]
       }
       state_store("unattached_at", unattached_at)
    })
