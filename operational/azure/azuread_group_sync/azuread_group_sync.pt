@@ -54,7 +54,7 @@ parameter "param_idp_href" do
   label "Identity Provider Href"
   category "CMP"
   description "The Href for the Identity Provider to associate to new users"
-  allowed_pattern /^\/api\/identity_providers\/\d*$/
+  #allowed_pattern /^\/api\/identity_providers\/\d*$/
 end
 
 parameter "param_purge_users" do
@@ -376,6 +376,18 @@ script "js_combined_data", type: "javascript" do
       usersToPurge: _.sortBy(ds_filtered_grs_users["UsersToPurge"], 'email')
     }
 EOS
+
+datasource "ds_group_sync_user_create" do
+  run_script "js_group_sync", "ds_combined_data"
+end
+
+script "js_group_sync_user_create", type: "javascript" do
+  parameters "ds_combined_data"
+  result "results"
+  code <<-EOS
+  var results = ds_combined_data
+
+  EOS
 end
 
 ###############################################################################
@@ -395,8 +407,7 @@ policy "policy_azuread_group_sync" do
 {{ $create_count := len data.groupsToCreate }}
 {{ if (gt $create_count 0) -}}
 {{ range data.groupsToCreate -}}
-<br />
-<br />
+
 ### The following groups need to be created and have permissions assigned to them in [Governance](https://governance.rightscale.com/):
 {{ .name }}
 {{ end -}}
@@ -405,7 +416,7 @@ ___
 ###### Policy Applied in Account: {{ rs_project_name }} (Account ID: {{ rs_project_id }}) within Org: {{ rs_org_name }} (Org ID: {{ rs_org_id }})
 EOS
     escalate $email
-    escalate $update_groups
+    # escalate $update_groups
     check false
   end
 end
