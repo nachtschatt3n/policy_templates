@@ -405,7 +405,7 @@ escalation "esc_budget_alert" do
 end
 
 policy "budget_alert" do
-  validate_each $format_costs do
+  validate $format_costs do
     summary_template "Cost Anomaly Detected
 ## Billing Centers: {{with(index data 0)}}{{.billingCenters}}{{end}}
 ### Bill Currency: {{with(index data 0)}}{{.currencyCode}}{{end}}
